@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "mcoe-d"
+  },
+  "targets": {
+    "mcoe-d": {
+      "hosting": {
+        "docs": [
+          "mcoe-docs"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+name: Cleanup preview
+
+# Deletes the per-PR Firebase Hosting Preview Channel when a PR closes.
+# Companion to deploy.yml (which creates the channel on PR open / sync).
+# Channels expire automatically after their TTL (default 7d), but explicit
+# cleanup keeps the list tidy and frees the quota slot immediately.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tenant
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Authenticate
+        env:
+          FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-sa.json
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$FIREBASE_SERVICE_ACCOUNT_PATH"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$FIREBASE_SERVICE_ACCOUNT_PATH" >> "$GITHUB_ENV"
+
+      # Idempotent — `|| true` swallows the "channel not found" non-zero
+      # exit when the channel was already cleaned up.
+      - name: Delete preview channel
+        run: |
+          firebase hosting:channel:delete \
+            "pr-${{ github.event.pull_request.number }}" \
+            --site mcoe-docs \
+            --project "${{ vars.FIREBASE_PROJECT_ID }}" \
+            --force \
+            || true

@@ -1,0 +1,122 @@
+name: Deploy docs
+
+# Tenant deploy workflow — Firebase Hosting + Preview Channels.
+#
+# - push to main           → build → deploy to the primary site (live).
+# - pull_request           → build → deploy to a per-PR Preview Channel
+#                            (`pr-<PR#>`) → POST the channel URL to the
+#                            recordPreview Cloud Function so the dashboard's
+#                            Preview button lights up with the real URL.
+#
+# Companion workflow `cleanup-preview.yml` deletes the channel when a PR
+# closes.
+#
+# Build chain — note: this is the *transitional* shape. Today the
+# @nebula-docs/cli package isn't published, so we check out both this
+# repo AND the framework monorepo (acasaro/nebula-docs), install pnpm
+# deps in the framework, and run the CLI from there against this repo's
+# content. Once the CLI is published, the "Checkout framework" + "Install
+# framework deps" + "Build via framework" steps collapse into a single
+# `npm ci && npm run build` in this repo.
+#
+# Required GH Actions secrets:
+#   FIREBASE_SERVICE_ACCOUNT          JSON of a Firebase Hosting deploy SA on mcoe-d
+#   NEBULA_RECORD_PREVIEW_SECRET      Matches Firebase secret DEV_RECORD_PREVIEW_SECRET
+#                                     (or RECORD_PREVIEW_SECRET for prod)
+#
+# Required GH Actions variables:
+#   FIREBASE_PROJECT_ID               e.g. mcoe-d
+#   NEBULA_RECORD_PREVIEW_URL         e.g. https://recordpreviewdev-XXXXXX-uc.a.run.app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write       # FirebaseExtended/action-hosting-deploy comments on PRs
+  checks: write
+
+concurrency:
+  group: deploy-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tenant
+        uses: actions/checkout@v4
+
+      - name: Checkout framework
+        uses: actions/checkout@v4
+        with:
+          repository: acasaro/nebula-docs
+          path: nebula-docs
+          ref: main
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+          cache-dependency-path: 'nebula-docs/pnpm-lock.yaml'
+
+      - name: Install framework deps
+        run: pnpm install --frozen-lockfile
+        working-directory: nebula-docs
+
+      # The CLI accepts an absolute path to the tenant directory and emits
+      # `<tenant>/dist/`. Running from the framework root with --filter so
+      # workspace deps resolve cleanly.
+      - name: Build tenant docs
+        run: pnpm --filter @nebula-docs/cli build "$GITHUB_WORKSPACE"
+        working-directory: nebula-docs
+
+      # main → live; PR → preview channel `pr-<PR#>`. Action handles both
+      # via the `channelId` input (blank = live deploy).
+      # `entryPoint` is the tenant repo (where firebase.json lives); we
+      # ran the build from the framework but firebase.json points at the
+      # tenant's `dist/` (which the framework wrote into).
+      - name: Deploy
+        id: deploy
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          target: docs
+          channelId: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || '' }}
+          expires: 7d
+
+      # Send the channel URL back to recordPreview so the dashboard can
+      # surface the Preview button. Skipped on `push` (live deploys don't
+      # populate previewUrl — that field is for PR previews only).
+      - name: Notify recordPreview
+        if: github.event_name == 'pull_request' && steps.deploy.outputs.details_url != ''
+        env:
+          PREVIEW_URL: ${{ steps.deploy.outputs.details_url }}
+          RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          ENDPOINT: ${{ vars.NEBULA_RECORD_PREVIEW_URL }}
+          SECRET: ${{ secrets.NEBULA_RECORD_PREVIEW_SECRET }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            -X POST "$ENDPOINT" \
+            -H "Authorization: Bearer $SECRET" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+                  --argjson runId "$RUN_ID" \
+                  --argjson prNumber "$PR_NUMBER" \
+                  --arg previewUrl "$PREVIEW_URL" \
+                  --arg repoFullName "$REPO_FULL_NAME" \
+                  '{runId: $runId, prNumber: $prNumber, previewUrl: $previewUrl, repoFullName: $repoFullName}')"
