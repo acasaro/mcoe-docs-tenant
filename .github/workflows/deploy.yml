@@ -118,6 +118,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_FULL_NAME: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
           ENDPOINT: ${{ vars.NEBULA_RECORD_PREVIEW_URL }}
           SECRET: ${{ secrets.NEBULA_RECORD_PREVIEW_SECRET }}
         run: |
@@ -130,4 +131,5 @@ jobs:
                   --argjson prNumber "$PR_NUMBER" \
                   --arg previewUrl "$PREVIEW_URL" \
                   --arg repoFullName "$REPO_FULL_NAME" \
-                  '{runId: $runId, prNumber: $prNumber, previewUrl: $previewUrl, repoFullName: $repoFullName}')"
+                  --arg branch "$BRANCH" \
+                  '{runId: $runId, prNumber: $prNumber, previewUrl: $previewUrl, repoFullName: $repoFullName, branch: $branch}')"
