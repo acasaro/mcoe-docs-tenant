@@ -81,29 +81,39 @@ jobs:
         run: pnpm --filter @nebula-docs/cli build "$GITHUB_WORKSPACE"
         working-directory: nebula-docs
 
-      # main → live; PR → preview channel `pr-<PR#>`. Action handles both
-      # via the `channelId` input (blank = live deploy).
-      # `entryPoint` is the tenant repo (where firebase.json lives); we
-      # ran the build from the framework but firebase.json points at the
-      # tenant's `dist/` (which the framework wrote into).
-      - name: Deploy
-        id: deploy
+      # main → live; PR → preview channel `pr-<PR#>`. Two separate steps
+      # because the action treats an empty `channelId: ''` as "channel
+      # deploy with no id" (which errors), not "live deploy". Live mode
+      # requires the input to be omitted entirely.
+      - name: Deploy live (main)
+        id: deploy-live
+        if: github.event_name != 'pull_request'
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}
           projectId: ${{ vars.FIREBASE_PROJECT_ID }}
           target: docs
-          channelId: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || '' }}
+
+      - name: Deploy preview channel (PR)
+        id: deploy-preview
+        if: github.event_name == 'pull_request'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}
+          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
+          target: docs
+          channelId: pr-${{ github.event.pull_request.number }}
           expires: 7d
 
       # Send the channel URL back to recordPreview so the dashboard can
       # surface the Preview button. Skipped on `push` (live deploys don't
       # populate previewUrl — that field is for PR previews only).
       - name: Notify recordPreview
-        if: github.event_name == 'pull_request' && steps.deploy.outputs.details_url != ''
+        if: github.event_name == 'pull_request' && steps.deploy-preview.outputs.details_url != ''
         env:
-          PREVIEW_URL: ${{ steps.deploy.outputs.details_url }}
+          PREVIEW_URL: ${{ steps.deploy-preview.outputs.details_url }}
           RUN_ID: ${{ github.run_id }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_FULL_NAME: ${{ github.repository }}
