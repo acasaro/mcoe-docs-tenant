@@ -35,7 +35,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-sa.json
         run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > "$FIREBASE_SERVICE_ACCOUNT_PATH"
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}' > "$FIREBASE_SERVICE_ACCOUNT_PATH"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$FIREBASE_SERVICE_ACCOUNT_PATH" >> "$GITHUB_ENV"
 
       # Idempotent — `|| true` swallows the "channel not found" non-zero
