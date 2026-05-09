@@ -94,6 +94,7 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}
           projectId: ${{ vars.FIREBASE_PROJECT_ID }}
           target: docs
+          channelId: live
 
       - name: Deploy preview channel (PR)
         id: deploy-preview
