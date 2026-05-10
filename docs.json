@@ -131,7 +131,8 @@
       {
         "label": "Bitrise",
         "href": "https://bitrise.io",
-        "icon": "external-link"
+        "icon": "https://firebasestorage.googleapis.com/v0/b/mcoe-d.firebasestorage.app/o/dev%2F129876467%2Fimages%2Fc1a737d25749995f.svg?alt=media&token=4a66be95-8391-410d-807d-d22f9e6a3f34",
+        "color": "#e200fa"
       },
       {
         "label": "Immerse",
