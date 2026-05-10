@@ -1,0 +1,71 @@
+name: Cleanup preview channel
+
+# Deletes the Firebase Hosting Preview Channel for a branch the moment
+# the branch is removed from GitHub. Fires for any branch deletion —
+# auto-merge cleanup, manual delete via UI/CLI, force-deletes, etc.
+#
+# Without this workflow the channel sticks around until its 7-day TTL
+# expires, which is wasteful (channel quota is finite) and confusing
+# (the channel list in Firebase Console accrues stale entries you can't
+# tell apart from active ones at a glance).
+#
+# `delete` events fire on the deleted ref. `ref_type` distinguishes
+# branch from tag — we only want branch deletions.
+#
+# Idempotent: deleting a non-existent channel returns a non-zero exit
+# from firebase-tools, swallowed via `|| true`.
+
+on:
+  delete:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch name to clean up the channel for (manual run)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      # Write the service-account JSON to disk and point GOOGLE_APPLICATION_CREDENTIALS
+      # at it so firebase-tools authenticates as the Hosting deploy SA.
+      - name: Authenticate
+        env:
+          FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-sa.json
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}' > "$FIREBASE_SERVICE_ACCOUNT_PATH"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$FIREBASE_SERVICE_ACCOUNT_PATH" >> "$GITHUB_ENV"
+
+      # Same sanitization as deploy.yml so the channel ID matches.
+      - name: Compute channel ID
+        id: channel
+        env:
+          REF_NAME: ${{ github.event.inputs.branch || github.event.ref }}
+        run: |
+          SANITIZED=$(echo "$REF_NAME" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9-]/-/g; s/-+/-/g; s/^-+//; s/-+$//' \
+            | cut -c -56)
+          echo "id=branch-${SANITIZED}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete preview channel
+        run: |
+          firebase hosting:channel:delete \
+            "${{ steps.channel.outputs.id }}" \
+            --site mcoe-docs \
+            --project "${{ vars.FIREBASE_PROJECT_ID }}" \
+            --force \
+            || true
