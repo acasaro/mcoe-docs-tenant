@@ -24,12 +24,13 @@ on:
         required: true
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
   cleanup:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.ref_type == 'branch' }}
-    runs-on: ubuntu-latest
+    runs-on: uhg-runner
 
     steps:
       # Need firebase.json in cwd; firebase CLI's `hosting:channel:delete`
@@ -37,12 +38,25 @@ jobs:
       # main explicitly since the deleted branch (default checkout target)
       # no longer exists.
       - name: Checkout tenant (main)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
 
+      - name: Configure JFrog SaaS Connection
+        uses: uhg-pipelines/epl-jf/configure-saas-connection@v4
+        with:
+          jfrog-url: https://centraluhg.jfrog.io
+          jfrog-edge-url: https://centraluhg.jfrog.io
+          jfrog-project-key: glb
+          npm-setup: true
+
+      - name: Fix pnpm auth for JFrog virtual repos
+        run: |
+          TOKEN=$(grep 'glb-npm-vir/:_authToken=' ~/.npmrc | sed 's/.*_authToken=//')
+          echo "//centraluhg.jfrog.io/:_authToken=${TOKEN}" >> ~/.npmrc
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
@@ -52,11 +66,9 @@ jobs:
       # Write the service-account JSON to disk and point GOOGLE_APPLICATION_CREDENTIALS
       # at it so firebase-tools authenticates as the Hosting deploy SA.
       - name: Authenticate
-        env:
-          FIREBASE_SERVICE_ACCOUNT_PATH: ${{ runner.temp }}/firebase-sa.json
         run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}' > "$FIREBASE_SERVICE_ACCOUNT_PATH"
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$FIREBASE_SERVICE_ACCOUNT_PATH" >> "$GITHUB_ENV"
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}' > "${{ runner.temp }}/firebase-sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${{ runner.temp }}/firebase-sa.json" >> "$GITHUB_ENV"
 
       # Same sanitization as deploy.yml so the channel ID matches.
       - name: Compute channel ID

@@ -15,6 +15,8 @@ name: Deploy docs
 # cleanup. The previous cleanup-preview.yml workflow is therefore unneeded.
 #
 # Required secrets:
+#   FRAMEWORK_CHECKOUT_TOKEN          PAT with read access to uhc-tech/nebula-docs-platform
+#                                     (cross-org checkout; GITHUB_TOKEN can't reach uhc-tech)
 #   FIREBASE_SERVICE_ACCOUNT_MCOE_D   JSON of a Firebase Hosting deploy SA on mcoe-d
 #                                     (set automatically by `firebase init hosting:github`)
 #   NEBULA_RECORD_PREVIEW_SECRET      Matches Firebase secret DEV_RECORD_PREVIEW_SECRET
@@ -36,6 +38,7 @@ on:
   create:
 
 permissions:
+  id-token: write
   contents: read
 
 # Cancel any in-flight build for the same branch — only the latest commit's
@@ -49,33 +52,46 @@ jobs:
     # `create` fires on tag creation too; we only want branches. push +
     # workflow_dispatch always pass.
     if: ${{ github.event_name != 'create' || github.event.ref_type == 'branch' }}
-    runs-on: ubuntu-latest
+    runs-on: uhg-runner
+
+    env:
+      PNPM_VERSION: 10.33.0
 
     steps:
       - name: Checkout tenant
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Checkout framework
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          repository: acasaro/nebula-docs
+          repository: uhc-tech/nebula-docs-platform
+          token: ${{ secrets.FRAMEWORK_CHECKOUT_TOKEN }}
           path: nebula-docs
           ref: main
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Configure JFrog SaaS Connection
+        uses: uhg-pipelines/epl-jf/configure-saas-connection@v4
         with:
-          version: 10.33.0
+          jfrog-url: https://centraluhg.jfrog.io
+          jfrog-edge-url: https://centraluhg.jfrog.io
+          jfrog-project-key: glb
+          npm-setup: true
+
+      - name: Fix pnpm auth for JFrog virtual repos
+        run: |
+          TOKEN=$(grep 'glb-npm-vir/:_authToken=' ~/.npmrc | sed 's/.*_authToken=//')
+          echo "//centraluhg.jfrog.io/:_authToken=${TOKEN}" >> ~/.npmrc
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
-          cache: 'pnpm'
-          cache-dependency-path: 'nebula-docs/pnpm-lock.yaml'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
 
       - name: Install framework deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
         working-directory: nebula-docs
 
       - name: Build tenant docs
@@ -103,37 +119,44 @@ jobs:
             echo "is-live=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Two deploy steps because FirebaseExtended treats `expires` as preview-
-      # channel-only; setting it alongside `channelId: live` errors. Splitting
-      # also makes the intent obvious in run logs.
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Authenticate Firebase
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}' > "${{ runner.temp }}/firebase-sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${{ runner.temp }}/firebase-sa.json" >> "$GITHUB_ENV"
+
+      # Two deploy steps because `hosting:channel:deploy` doesn't support
+      # the live channel, and `deploy --only hosting` doesn't support expires.
       - name: Deploy live (main)
-        id: deploy-live
         if: steps.channel.outputs.is-live == 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}
-          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
-          target: docs
-          channelId: live
+        run: |
+          firebase deploy --only hosting:docs \
+            --project "${{ vars.FIREBASE_PROJECT_ID }}" \
+            --force
 
       - name: Deploy preview channel (branch)
         id: deploy-preview
         if: steps.channel.outputs.is-live != 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MCOE_D }}
-          projectId: ${{ vars.FIREBASE_PROJECT_ID }}
-          target: docs
-          channelId: ${{ steps.channel.outputs.id }}
-          expires: 7d
+        run: |
+          OUTPUT=$(firebase hosting:channel:deploy "${{ steps.channel.outputs.id }}" \
+            --only docs \
+            --project "${{ vars.FIREBASE_PROJECT_ID }}" \
+            --expires 7d \
+            --json)
+          echo "$OUTPUT"
+          URL=$(echo "$OUTPUT" | jq -r '.result["mcoe-docs"].url // empty')
+          if [ -z "$URL" ]; then
+            URL=$(echo "$OUTPUT" | jq -r '.. | .url? // empty' | head -1)
+          fi
+          echo "details_url=$URL" >> "$GITHUB_OUTPUT"
 
       # Send the channel URL back to recordPreview so the dashboard subscription
       # can surface the Preview button. Skipped on live deploys (the live URL
       # is the deployment.domain on the dashboard, not a previewUrl).
       - name: Notify recordPreview
-        if: steps.deploy-preview.outputs.details_url != ''
+        if: steps.deploy-preview.outputs.details_url != '' && vars.NEBULA_RECORD_PREVIEW_URL != ''
         env:
           PREVIEW_URL: ${{ steps.deploy-preview.outputs.details_url }}
           RUN_ID: ${{ github.run_id }}
