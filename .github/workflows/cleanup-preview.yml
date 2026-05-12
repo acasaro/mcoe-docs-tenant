@@ -42,26 +42,10 @@ jobs:
         with:
           ref: main
 
-      - name: Configure JFrog SaaS Connection
-        uses: uhg-pipelines/epl-jf/configure-saas-connection@v4
-        with:
-          jfrog-url: https://centraluhg.jfrog.io
-          jfrog-edge-url: https://centraluhg.jfrog.io
-          jfrog-project-key: glb
-          npm-setup: true
-
-      - name: Fix pnpm auth for JFrog virtual repos
-        run: |
-          TOKEN=$(grep 'glb-npm-vir/:_authToken=' ~/.npmrc | sed 's/.*_authToken=//')
-          echo "//centraluhg.jfrog.io/:_authToken=${TOKEN}" >> ~/.npmrc
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '22'
-
-      - name: Install Firebase CLI
-        run: npm install --global firebase-tools
 
       # Write the service-account JSON to disk and point GOOGLE_APPLICATION_CREDENTIALS
       # at it so firebase-tools authenticates as the Hosting deploy SA.
@@ -82,16 +66,19 @@ jobs:
             | cut -c -56)
           echo "id=branch-${SANITIZED}" >> "$GITHUB_OUTPUT"
 
-      # Delete the channel. If it's already gone (the original `|| true`
-      # case) treat that as success; surface anything else as a real
-      # failure so we don't get silent green runs while the channel sits
-      # untouched (the bug that masked the missing-checkout issue above).
+      # Delete the channel. Uses `npx` to run firebase-tools without a
+      # separate install step (this workflow has no `pnpm install` so the
+      # devDep route from deploy.yml doesn't apply; npx fetches + caches
+      # the binary on the runner). If the channel's already gone (the
+      # original `|| true` case) treat that as success; surface anything
+      # else as a real failure so we don't get silent green runs while
+      # the channel sits untouched.
       - name: Delete preview channel
         env:
           CHANNEL_ID: ${{ steps.channel.outputs.id }}
         run: |
           set +e
-          out=$(firebase hosting:channel:delete "$CHANNEL_ID" \
+          out=$(npx --yes firebase-tools@^13 hosting:channel:delete "$CHANNEL_ID" \
             --site mcoe-docs \
             --project "${{ vars.FIREBASE_PROJECT_ID }}" \
             --force 2>&1)
