@@ -100,7 +100,7 @@ jobs:
       # install` only resolves the dependency graph + symlinks; no network
       # fetches. Cuts install from ~1-2min cold to ~10-15s warm.
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -113,7 +113,7 @@ jobs:
       # Cache Astro's per-tenant compiled output. Key on content + the
       # CLI version, so an `@nebula-docs/cli` bump invalidates correctly.
       - name: Cache Astro build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .astro
